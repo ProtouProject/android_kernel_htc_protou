@@ -104,24 +104,22 @@ static void percpu_timer_stop(void);
 
 int __cpu_disable(void)
 {
-	unsigned int cpu;
+	unsigned int cpu = smp_processor_id();
+	struct task_struct *p;
+	int ret;
 
-	/*
-	 * The identity mapping is uncached (strongly ordered), so
-	 * switch away from it before attempting any exclusive accesses.
-	 */
-	cpu_switch_mm(mm->pgd, mm);
-	enter_lazy_tlb(mm, current);
+	ret = platform_cpu_disable(cpu);
+	if (ret)
+		return ret;
+
+	set_cpu_online(cpu, false);
+
+	migrate_irqs();
+
+	percpu_timer_stop();
+
+	flush_cache_all();
 	local_flush_tlb_all();
- 
- 	/*
- 	 * All kernel threads share the same mm context; grab a
- 	 * reference and switch to it.
- 	 */
-	cpu = smp_processor_id();
- 	atomic_inc(&mm->mm_count);
- 	current->active_mm = mm;
- 	cpumask_set_cpu(cpu, mm_cpumask(mm));
 
 	read_lock(&tasklist_lock);
 	for_each_process(p) {
