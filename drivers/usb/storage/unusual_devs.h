@@ -45,6 +45,13 @@ UNUSUAL_DEV(  0x03ee, 0x6906, 0x0003, 0x0003,
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_IGNORE_RESIDUE ),
 
+/* Reported by Jesse Feddema <jdfeddema@gmail.com> */
+UNUSUAL_DEV(  0x177f, 0x0400, 0x0000, 0x0000,
+		"Yarvik",
+		"PMP400",
+		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
+		US_FL_BULK_IGNORE_TAG | US_FL_MAX_SECTORS_64 ),
+
 UNUSUAL_DEV(  0x03f0, 0x0107, 0x0200, 0x0200,
 		"HP",
 		"CD-Writer+",
