@@ -342,23 +342,6 @@ static void evict_oldest_expect(struct nf_conn *master,
 	}
 }
 
-static inline int refresh_timer(struct nf_conntrack_expect *i)
-{
-	struct nf_conn_help *master_help = nfct_help(i->master);
-	const struct nf_conntrack_expect_policy *p;
-
-	if (!del_timer(&i->timeout))
-		return 0;
-
-	p = &rcu_dereference_protected(
-		master_help->helper,
-		lockdep_is_held(&nf_conntrack_lock)
-		)->expect_policy[i->class];
-	i->timeout.expires = jiffies + p->timeout * HZ;
-	add_timer(&i->timeout);
-	return 1;
-}
-
 static inline int __nf_ct_expect_check(struct nf_conntrack_expect *expect)
 {
 	const struct nf_conntrack_expect_policy *p;
@@ -367,7 +350,7 @@ static inline int __nf_ct_expect_check(struct nf_conntrack_expect *expect)
 	struct nf_conn_help *master_help = nfct_help(master);
 	struct nf_conntrack_helper *helper;
 	struct net *net = nf_ct_exp_net(expect);
-	struct hlist_node *n;
+	struct hlist_node *n, *next;
 	unsigned int h;
 	int ret = 1;
 

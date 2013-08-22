@@ -1,2 +1,2 @@
-android_kernel_protou_3.4
-=========================
+HTC Desire X kernel 3.4.59
+==========================
