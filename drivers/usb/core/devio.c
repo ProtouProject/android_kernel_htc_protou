@@ -405,7 +405,6 @@ __acquires(ps->lock)
  			goto rescan;
 		}
 	}
-}
 
 static void async_completed(struct urb *urb)
 {
