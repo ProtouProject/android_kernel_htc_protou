@@ -65,8 +65,8 @@ unsigned ext4_num_overhead_clusters(struct super_block *sb,
 	num_clusters = ext4_num_base_meta_clusters(sb, block_group);
 
 	if (ext4_block_in_group(sb, ext4_block_bitmap(sb, gdp), block_group)) {
-		block_cluster = EXT4_B2C(sbi, (start -
-					       ext4_block_bitmap(sb, gdp)));
+		block_cluster = EXT4_B2C(sbi,
+					 ext4_block_bitmap(sb, gdp) - start);
 		if (block_cluster < num_clusters)
 			block_cluster = -1;
 		else if (block_cluster == num_clusters) {
@@ -77,7 +77,7 @@ unsigned ext4_num_overhead_clusters(struct super_block *sb,
 
 	if (ext4_block_in_group(sb, ext4_inode_bitmap(sb, gdp), block_group)) {
 		inode_cluster = EXT4_B2C(sbi,
-					 start - ext4_inode_bitmap(sb, gdp));
+					 ext4_inode_bitmap(sb, gdp) - start);
 		if (inode_cluster < num_clusters)
 			inode_cluster = -1;
 		else if (inode_cluster == num_clusters) {
@@ -89,7 +89,7 @@ unsigned ext4_num_overhead_clusters(struct super_block *sb,
 	itbl_blk = ext4_inode_table(sb, gdp);
 	for (i = 0; i < sbi->s_itb_per_group; i++) {
 		if (ext4_block_in_group(sb, itbl_blk + i, block_group)) {
-			c = EXT4_B2C(sbi, start - itbl_blk + i);
+			c = EXT4_B2C(sbi, itbl_blk + i - start);
 			if ((c < num_clusters) || (c == inode_cluster) ||
 			    (c == block_cluster) || (c == itbl_cluster))
 				continue;
