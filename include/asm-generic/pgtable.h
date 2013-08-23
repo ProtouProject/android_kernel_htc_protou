@@ -37,18 +37,6 @@ static inline int ptep_test_and_clear_young(struct vm_area_struct *vma,
 #ifndef __HAVE_ARCH_PMDP_TEST_AND_CLEAR_YOUNG
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 
-#ifndef pmd_read_atomic
-static inline pmd_t pmd_read_atomic(pmd_t *pmdp)
-{
-	/*
-	 * Depend on compiler for an atomic pmd read. NOTE: this is
-	 * only going to work, if the pmdval_t isn't larger than
-	 * an unsigned long.
-	 */
-	return *pmdp;
-}
-#endif
-
 static inline int pmdp_test_and_clear_young(struct vm_area_struct *vma,
 					    unsigned long address,
 					    pmd_t *pmdp)
@@ -371,22 +359,9 @@ static inline int pmd_write(pmd_t pmd)
 
 static inline int pmd_none_or_trans_huge_or_clear_bad(pmd_t *pmd)
 {
-	
-	pmd_t pmdval = pmd_read_atomic(pmd);
-	/*
-	 * The barrier will stabilize the pmdval in a register or on
-	 * the stack so that it will stop changing under the code.
-	 *
-	 * When CONFIG_TRANSPARENT_HUGEPAGE=y on x86 32bit PAE,
-	 * pmd_read_atomic is allowed to return a not atomic pmdval
-	 * (for example pointing to an hugepage that has never been
-	 * mapped in the pmd). The below checks will only care about
-	 * the low part of the pmd with 32bit PAE x86 anyway, with the
-	 * exception of pmd_none(). So the important thing is that if
-	 * the low part of the pmd is found null, the high part will
-	 * be also null or the pmd_none() check below would be
-	 * confused.
-	 */
+
+	pmd_t pmdval = *pmd;
+
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	barrier();
 #endif
