@@ -123,7 +123,8 @@ struct scsi_device {
 	unsigned retry_hwerror:1;	
 	unsigned last_sector_bug:1;	
 	unsigned no_read_disc_info:1;	
-	unsigned no_read_capacity_16:1; 
+	unsigned no_read_capacity_16:1;
+	unsigned try_rc_10_first:1; 
 	unsigned is_visible:1;	
 
 	DECLARE_BITMAP(supported_events, SDEV_EVT_MAXBITS); 
