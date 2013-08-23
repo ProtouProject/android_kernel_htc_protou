@@ -88,7 +88,6 @@ struct usb_hcd {
 	unsigned		wireless:1;	
 	unsigned		authorized_default:1;
 	unsigned		has_tt:1;	
-	unsigned		broken_pci_sleep:1;	
 
 	unsigned int		irq;		
 	void __iomem		*regs;		
