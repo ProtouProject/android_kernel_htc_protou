@@ -748,6 +748,10 @@ static void prb_retire_current_block(struct tpacket_kbdq_core *pkc,
 		prb_close_block(pkc, pbd, po, status);
 		return;
 	}
+
+	WARN(1, "ERROR-pbd[%d]:%p\n", pkc->kactive_blk_num, pbd);
+	dump_stack();
+	BUG();
 }
 
 static int prb_curr_blk_in_use(struct tpacket_kbdq_core *pkc,
@@ -1075,14 +1079,6 @@ static void __fanout_unlink(struct sock *sk, struct packet_sock *po)
 	spin_unlock(&f->lock);
 }
 
-bool match_fanout_group(struct packet_type *ptype, struct sock * sk)
-{
-	if (ptype->af_packet_priv == (void*)((struct packet_sock *)sk)->fanout)
-		return true;
-
-	return false;
-}
-
 static int fanout_add(struct sock *sk, u16 id, u16 type_flags)
 {
 	struct packet_sock *po = pkt_sk(sk);
@@ -1135,7 +1131,6 @@ static int fanout_add(struct sock *sk, u16 id, u16 type_flags)
 		match->prot_hook.dev = po->prot_hook.dev;
 		match->prot_hook.func = packet_rcv_fanout;
 		match->prot_hook.af_packet_priv = match;
-		match->prot_hook.id_match = match_fanout_group;
 		dev_add_pack(&match->prot_hook);
 		list_add(&match->list, &fanout_list);
 	}
@@ -1677,6 +1672,7 @@ static void tpacket_destruct_skb(struct sk_buff *skb)
 
 	if (likely(po->tx_ring.pg_vec)) {
 		ph = skb_shinfo(skb)->destructor_arg;
+		BUG_ON(__packet_get_status(po, ph) != TP_STATUS_SENDING);
 		BUG_ON(atomic_read(&po->tx_ring.pending) == 0);
 		atomic_dec(&po->tx_ring.pending);
 		__packet_set_status(po, ph, TP_STATUS_AVAILABLE);
@@ -2157,15 +2153,13 @@ static int packet_release(struct socket *sock)
 
 	packet_flush_mclist(sk);
 
-	if (po->rx_ring.pg_vec) {
-		memset(&req_u, 0, sizeof(req_u));
-		packet_set_ring(sk, &req_u, 1, 0);
-	}
+	memset(&req_u, 0, sizeof(req_u));
 
-	if (po->tx_ring.pg_vec) {
-		memset(&req_u, 0, sizeof(req_u));
+	if (po->rx_ring.pg_vec)
+		packet_set_ring(sk, &req_u, 1, 0);
+
+	if (po->tx_ring.pg_vec)
 		packet_set_ring(sk, &req_u, 1, 1);
-	}
 
 	fanout_release(sk);
 
@@ -2519,11 +2513,12 @@ static int packet_getname_spkt(struct socket *sock, struct sockaddr *uaddr,
 		return -EOPNOTSUPP;
 
 	uaddr->sa_family = AF_PACKET;
-	memset(uaddr->sa_data, 0, sizeof(uaddr->sa_data));
 	rcu_read_lock();
 	dev = dev_get_by_index_rcu(sock_net(sk), pkt_sk(sk)->ifindex);
 	if (dev)
-		strlcpy(uaddr->sa_data, dev->name, sizeof(uaddr->sa_data));
+		strncpy(uaddr->sa_data, dev->name, 14);
+	else
+		memset(uaddr->sa_data, 0, 14);
 	rcu_read_unlock();
 	*uaddr_len = sizeof(*uaddr);
 

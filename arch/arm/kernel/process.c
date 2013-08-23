@@ -306,7 +306,6 @@ void machine_shutdown(void)
 void machine_halt(void)
 {
 	machine_shutdown();
-	local_irq_disable();
 	while (1);
 }
 
@@ -330,7 +329,6 @@ void machine_restart(char *cmd)
 
 	
 	printk("Reboot failed -- System halted\n");
-	local_irq_disable();
 	while (1);
 }
 

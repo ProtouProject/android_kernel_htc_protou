@@ -252,7 +252,7 @@ static inline void ClearPageCompound(struct page *page)
 #endif
 #else
 TESTPAGEFLAG(Compound, compound)
-__SETPAGEFLAG(Head, compound)  __CLEARPAGEFLAG(Head, compound)
+__PAGEFLAG(Head, compound)
 
 #define PG_head_tail_mask ((1L << PG_compound) | (1L << PG_reclaim))
 

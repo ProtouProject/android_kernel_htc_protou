@@ -613,8 +613,6 @@ static inline void init_usb_anchor(struct usb_anchor *anchor)
 
 typedef void (*usb_complete_t)(struct urb *);
 
-#define usb_unblock_urb	usb_unpoison_urb
-
 /**
  * struct urb - USB Request Block
  * @urb_list: For use by current owner of the URB.

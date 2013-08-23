@@ -690,10 +690,6 @@ int fib6_add(struct fib6_node *root, struct rt6_info *rt, struct nl_info *info)
 					offsetof(struct rt6_info, rt6i_src),
 					allow_create, replace_required);
 
-			if (IS_ERR(sn)) {
-				err = PTR_ERR(sn);
-				sn = NULL;
-			}
 			if (!sn) {
 				node_free(sfn);
 				goto st_failure;
@@ -1348,7 +1344,7 @@ static int fib6_age(struct rt6_info *rt, void *arg)
 				neigh_flags = neigh->flags;
 				neigh_release(neigh);
 			}
-			if (!(neigh_flags & NTF_ROUTER)) {
+			if (neigh_flags & NTF_ROUTER) {
 				RT6_TRACE("purging route %p via non-router but gateway\n",
 					  rt);
 				return -1;

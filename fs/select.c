@@ -310,7 +310,7 @@ get_max:
 			max++;
 			set >>= 1;
 		} while (set);
-		max += n * BITS_PER_LONG;
+		max += n * __NFDBITS;
 	}
 
 	return max;
@@ -372,11 +372,11 @@ int do_select(int n, fd_set_bits *fds, struct timespec *end_time)
 			in = *inp++; out = *outp++; ex = *exp++;
 			all_bits = in | out | ex;
 			if (all_bits == 0) {
-				i += BITS_PER_LONG;
+				i += __NFDBITS;
 				continue;
 			}
 
-			for (j = 0; j < BITS_PER_LONG; ++j, ++i, bit <<= 1) {
+			for (j = 0; j < __NFDBITS; ++j, ++i, bit <<= 1) {
 				int fput_needed;
 				if (i >= n)
 					break;

@@ -312,6 +312,11 @@ retry:
 				destroy_super(s);
 				s = NULL;
 			}
+			down_write(&old->s_umount);
+			if (unlikely(!(old->s_flags & MS_BORN))) {
+				deactivate_locked_super(old);
+				goto retry;
+			}
 			return old;
 		}
 	}

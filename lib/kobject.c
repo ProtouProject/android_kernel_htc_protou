@@ -585,7 +585,7 @@ struct kobject *kset_find_obj(struct kset *kset, const char *name)
 
 	list_for_each_entry(k, &kset->list, entry) {
 		if (kobject_name(k) && !strcmp(kobject_name(k), name)) {
-			ret = kobject_get_unless_zero(k);
+			ret = kobject_get(k);
 			break;
 		}
 	}

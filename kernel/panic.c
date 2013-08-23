@@ -81,9 +81,9 @@ void panic(const char *fmt, ...)
 
 	crash_kexec(NULL);
 
-	smp_send_stop();
-
 	kmsg_dump(KMSG_DUMP_PANIC);
+
+	smp_send_stop();
 
 	atomic_notifier_call_chain(&panic_notifier_list, 0, buf);
 

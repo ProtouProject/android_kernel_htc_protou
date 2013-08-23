@@ -382,16 +382,6 @@ static int irq_out_pump_restart(struct hid_device *hid)
 		return -1;
 }
 
-static int irq_out_pump_restart(struct hid_device *hid)
-{
-	struct usbhid_device *usbhid = hid->driver_data;
-
-	if (usbhid->outhead != usbhid->outtail)
-		return hid_submit_out(hid);
-	else
-		return -1;
-}
-
 static void hid_irq_out(struct urb *urb)
 {
 	struct hid_device *hid = urb->context;

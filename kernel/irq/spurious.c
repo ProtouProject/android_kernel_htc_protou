@@ -62,7 +62,9 @@ static int try_one_irq(int irq, struct irq_desc *desc, bool force)
 
 	action = desc->action;
 	if (!action || !(action->flags & IRQF_SHARED) ||
-		(action->flags & __IRQF_TIMER))
+	    (action->flags & __IRQF_TIMER) ||
+	    (action->handler(irq, action->dev_id) == IRQ_HANDLED) ||
+	    !action->next)
 		goto out;
 
 	
@@ -76,7 +78,6 @@ static int try_one_irq(int irq, struct irq_desc *desc, bool force)
 	do {
 		if (handle_irq_event(desc) == IRQ_HANDLED)
 			ret = IRQ_HANDLED;
-		/* Make sure that there is still a valid action */
 		action = desc->action;
 	} while ((desc->istate & IRQS_PENDING) && action);
 	desc->istate &= ~IRQS_POLL_INPROGRESS;
