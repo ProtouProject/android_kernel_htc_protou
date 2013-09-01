@@ -27,7 +27,6 @@
 #include <linux/regulator/consumer.h>
 #include <linux/smp.h>
 #include <linux/platform_device.h>
-#include <linux/debugfs.h>
 
 #include <mach/socinfo.h>
 #include <mach/board.h>
@@ -41,8 +40,6 @@
 #include "acpuclock.h"
 #include "acpuclock-8625q.h"
 
-#define HTC_LOCK_CPU_700MHZ	1
-
 #define A11S_CLK_CNTL_ADDR	(MSM_CSR_BASE + 0x100)
 #define A11S_CLK_SEL_ADDR	(MSM_CSR_BASE + 0x104)
 
@@ -52,10 +49,14 @@
 
 #define POWER_COLLAPSE_KHZ 19200
 
+/* Max CPU frequency allowed by hardware while in standby waiting for an irq. */
 #define MAX_WAIT_FOR_IRQ_KHZ 128000
 
 struct regulator *ncp6335d_handle;
 
+/**
+ * enum - For acpuclock PLL IDs
+ */
 enum {
 	ACPU_PLL_0	= 0,
 	ACPU_PLL_1,
@@ -85,10 +86,10 @@ static struct acpu_clk_src pll_clk[ACPU_PLL_END] = {
 };
 
 static struct pll_config pll4_cfg_tbl[] = {
-	[0] = {  36, 1, 2 }, 
-	[1] = {  52, 1, 2 }, 
-	[2] = {  63, 0, 1 }, 
-	[3] = {  73, 0, 1 }, 
+	[0] = {  36, 1, 2 }, /*  700.8 MHz */
+	[1] = {  52, 1, 2 }, /* 1008 MHz */
+	[2] = {  63, 0, 1 }, /* 1209.6 MHz */
+	[3] = {  73, 0, 1 }, /* 1401.6 MHz */
 };
 
 struct clock_state {
@@ -115,12 +116,14 @@ struct clkctl_acpu_speed {
 
 static struct clock_state drv_state = { 0 };
 
+/* PVS MAX Voltage in uV as per frequencies*/
 
 # define MAX_14GHZ_VOLTAGE 1350000
 # define MAX_12GHZ_VOLTAGE 1275000
 # define MAX_1GHZ_VOLTAGE 1175000
 # define MAX_NOMINAL_VOLTAGE 1150000
 
+/* PVS deltas as per formula*/
 # define DELTA_LEVEL_1_UV 0
 # define DELTA_LEVEL_2_UV 75000
 # define DELTA_LEVEL_3_UV 150000
@@ -134,17 +137,13 @@ static struct clkctl_acpu_speed acpu_freq_tbl_cmn[] = {
 	{ 0, 600000, ACPU_PLL_2, 2, 1, 75000, 3, 0, 160000 },
 	{ 1, 700800, ACPU_PLL_4, 6, 0, 87500, 3, MAX_NOMINAL_VOLTAGE, 160000,
 						&pll4_cfg_tbl[0]},
-#if !HTC_LOCK_CPU_700MHZ
-	{ 1, 1008000, ACPU_PLL_4, 6, 0, 126000, 3, MAX_1GHZ_VOLTAGE, 200000,
+	{ 1, 1008000, ACPU_PLL_4, 6, 0, 126000, 3, 1175000, 200000,
 						&pll4_cfg_tbl[1]},
-#endif
 };
 
 static struct clkctl_acpu_speed acpu_freq_tbl_1209[] = {
-#if !HTC_LOCK_CPU_700MHZ
 	{ 1, 1209600, ACPU_PLL_4, 6, 0, 151200, 3, MAX_12GHZ_VOLTAGE, 200000,
 						&pll4_cfg_tbl[2]},
-#endif
 };
 
 static struct clkctl_acpu_speed acpu_freq_tbl_1401[] = {
@@ -152,6 +151,7 @@ static struct clkctl_acpu_speed acpu_freq_tbl_1401[] = {
 						&pll4_cfg_tbl[3]},
 };
 
+/* Entry corresponding to CDMA build*/
 static struct clkctl_acpu_speed acpu_freq_tbl_196608[] = {
 	{ 1, 196608, ACPU_PLL_1, 1, 0,  65536, 2, MAX_NOMINAL_VOLTAGE, 98304 },
 };
@@ -165,6 +165,7 @@ static struct clkctl_acpu_speed acpu_freq_tbl[ARRAY_SIZE(acpu_freq_tbl_cmn)
 	+ ARRAY_SIZE(acpu_freq_tbl_1401)
 	+ ARRAY_SIZE(acpu_freq_tbl_null)];
 
+/* Switch to this when reprogramming PLL4 */
 static struct clkctl_acpu_speed *backup_s;
 
 #ifdef CONFIG_CPU_FREQ_MSM
@@ -176,6 +177,11 @@ static void __devinit cpufreq_table_init(void)
 	for_each_possible_cpu(cpu) {
 		unsigned int i, freq_cnt = 0;
 
+		/* Construct the freq_table table from acpu_freq_tbl since
+		 * the freq_table values need to match frequencies specified
+		 * in acpu_freq_tbl and acpu_freq_tbl needs to be fixed up
+		 * during init.
+		 */
 		for (i = 0; acpu_freq_tbl[i].a11clk_khz != 0
 				&& freq_cnt < ARRAY_SIZE(*freq_table)-1; i++) {
 			if (acpu_freq_tbl[i].use_for_scaling) {
@@ -186,12 +192,12 @@ static void __devinit cpufreq_table_init(void)
 			}
 		}
 
-		
+		/* freq_table not big enough to store all usable freqs. */
 		BUG_ON(acpu_freq_tbl[i].a11clk_khz != 0);
 
 		freq_table[cpu][freq_cnt].index = freq_cnt;
 		freq_table[cpu][freq_cnt].frequency = CPUFREQ_TABLE_END;
-		
+		/* Register table with CPUFreq. */
 		cpufreq_frequency_table_get_attr(freq_table[cpu], cpu);
 		pr_info("CPU%d: %d scaling frequencies supported.\n",
 			cpu, freq_cnt);
@@ -209,52 +215,66 @@ static void update_jiffies(int cpu, unsigned long loops)
 						loops;
 	}
 #endif
-	
+	/* Adjust the global one */
 	loops_per_jiffy = loops;
 }
 
+/* Assumes PLL4 is off and the acpuclock isn't sourced from PLL4 */
 static void acpuclk_config_pll4(struct pll_config *pll)
 {
+	/*
+	 * Make sure write to disable PLL_4 has completed
+	 * before reconfiguring that PLL.
+	*/
 	mb();
 	writel_relaxed(pll->l, PLL4_L_VAL_ADDR);
 	writel_relaxed(pll->m, PLL4_M_VAL_ADDR);
 	writel_relaxed(pll->n, PLL4_N_VAL_ADDR);
-	
+	/* Make sure PLL is programmed before returning. */
 	mb();
 }
 
+/* Set proper dividers for the given clock speed. */
 static void acpuclk_set_div(const struct clkctl_acpu_speed *hunt_s)
 {
 	uint32_t reg_clkctl, reg_clksel, clk_div, src_sel;
 
 	reg_clksel = readl_relaxed(A11S_CLK_SEL_ADDR);
 
-	
+	/* AHB_CLK_DIV */
 	clk_div = (reg_clksel >> 1) & 0x03;
-	
+	/* CLK_SEL_SRC1NO */
 	src_sel = reg_clksel & 1;
 
+	/*
+	 * If the new clock divider is higher than the previous, then
+	 * program the divider before switching the clock
+	 */
 	if (hunt_s->ahbclk_div > clk_div) {
 		reg_clksel &= ~(0x3 << 1);
 		reg_clksel |= (hunt_s->ahbclk_div << 1);
 		writel_relaxed(reg_clksel, A11S_CLK_SEL_ADDR);
 	}
 
-	
+	/* Program clock source and divider */
 	reg_clkctl = readl_relaxed(A11S_CLK_CNTL_ADDR);
 	reg_clkctl &= ~(0xFF << (8 * src_sel));
 	reg_clkctl |= hunt_s->a11clk_src_sel << (4 + 8 * src_sel);
 	reg_clkctl |= hunt_s->a11clk_src_div << (0 + 8 * src_sel);
 	writel_relaxed(reg_clkctl, A11S_CLK_CNTL_ADDR);
 
-	
+	/* Program clock source selection */
 	reg_clksel ^= 1;
 	writel_relaxed(reg_clksel, A11S_CLK_SEL_ADDR);
 
-	
+	/* Wait for the clock switch to complete */
 	mb();
 	udelay(50);
 
+	/*
+	 * If the new clock divider is lower than the previous, then
+	 * program the divider after switching the clock
+	 */
 	if (hunt_s->ahbclk_div < clk_div) {
 		reg_clksel &= ~(0x3 << 1);
 		reg_clksel |= (hunt_s->ahbclk_div << 1);
@@ -296,13 +316,12 @@ static int acpuclk_8625q_set_rate(int cpu, unsigned long rate,
 		goto out;
 	}
 
-	if (reason != SETRATE_PC) {
+	if (reason != SETRATE_PC)
 		cur_s->vdd = regulator_get_voltage(drv_state.vreg_cpu);
-		if (cur_s->vdd <= 0) {
-			rc = -EINVAL;
-			goto out;
-		}
-	}
+
+	if (cur_s->vdd <= 0)
+		goto out;
+
 	pr_debug("current freq=%dKhz vdd=%duV\n",
 			cur_s->a11clk_khz, cur_s->vdd);
 
@@ -319,7 +338,7 @@ static int acpuclk_8625q_set_rate(int cpu, unsigned long rate,
 		goto out;
 	}
 
-	
+	/* Choose the highest speed at or below 'rate' with same PLL. */
 	if (reason != SETRATE_CPUFREQ
 		&& tgt_s->a11clk_khz < cur_s->a11clk_khz) {
 		while (tgt_s->pll != ACPU_PLL_TCXO &&
@@ -333,8 +352,12 @@ static int acpuclk_8625q_set_rate(int cpu, unsigned long rate,
 	if (strt_s->pll != ACPU_PLL_TCXO)
 		plls_enabled |= 1 << strt_s->pll;
 
+	/* Need to do this when coming out of power collapse since some modem
+	 * firmwares reset the VDD when the application processor enters power
+	 * collapse.
+	 */
 	if (reason == SETRATE_CPUFREQ || reason == SETRATE_PC) {
-		
+		/* Increase VDD if needed. */
 		if (tgt_s->vdd > cur_s->vdd) {
 			rc = acpuclk_set_vdd_level(tgt_s->vdd);
 			if (rc < 0) {
@@ -345,9 +368,9 @@ static int acpuclk_8625q_set_rate(int cpu, unsigned long rate,
 		}
 	}
 
-	
+	/* Set wait states for CPU inbetween frequency changes */
 	reg_clkctl = readl_relaxed(A11S_CLK_CNTL_ADDR);
-	reg_clkctl |= (100 << 16); 
+	reg_clkctl |= (100 << 16); /* set WT_ST_CNT */
 	writel_relaxed(reg_clkctl, A11S_CLK_CNTL_ADDR);
 
 	pr_debug("Switching from ACPU rate %u KHz -> %u KHz\n",
@@ -358,11 +381,15 @@ static int acpuclk_8625q_set_rate(int cpu, unsigned long rate,
 	if (tgt_s->pll == ACPU_PLL_4) {
 		if (strt_s->pll == ACPU_PLL_4 ||
 				delta > drv_state.max_speed_delta_khz) {
+			/*
+			 * Enable the backup PLL if required
+			 * and switch to it.
+			 */
 			clk_enable(pll_clk[backup_s->pll].clk);
 			acpuclk_set_div(backup_s);
 			update_jiffies(cpu, backup_s->lpj);
 		}
-		
+		/* Make sure PLL4 is off before reprogramming */
 		if ((plls_enabled & (1 << tgt_s->pll))) {
 			clk_disable(pll_clk[tgt_s->pll].clk);
 			plls_enabled &= ~(1 << tgt_s->pll);
@@ -372,6 +399,10 @@ static int acpuclk_8625q_set_rate(int cpu, unsigned long rate,
 
 	} else if (strt_s->pll == ACPU_PLL_4) {
 		if (delta > drv_state.max_speed_delta_khz) {
+			/*
+			 * Enable the bcackup PLL if required
+			 * and switch to it.
+			 */
 			clk_enable(pll_clk[backup_s->pll].clk);
 			acpuclk_set_div(backup_s);
 			update_jiffies(cpu, backup_s->lpj);
@@ -391,20 +422,20 @@ static int acpuclk_8625q_set_rate(int cpu, unsigned long rate,
 	acpuclk_set_div(tgt_s);
 	drv_state.current_speed = tgt_s;
 	pr_debug("The new clock speed is %u\n", tgt_s->a11clk_khz);
-	
+	/* Re-adjust lpj for the new clock speed. */
 	update_jiffies(cpu, tgt_s->lpj);
 
-	
+	/* Disable the backup PLL */
 	if ((delta > drv_state.max_speed_delta_khz)
 			|| (strt_s->pll == ACPU_PLL_4 &&
 				tgt_s->pll == ACPU_PLL_4))
 		clk_disable(pll_clk[backup_s->pll].clk);
 
-	
+	/* Nothing else to do for SWFI. */
 	if (reason == SETRATE_SWFI)
 		goto out;
 
-	
+	/* Change the AXI bus frequency if we can. */
 	if (strt_s->axiclk_khz != tgt_s->axiclk_khz) {
 		res = clk_set_rate(drv_state.ebi1_clk,
 				tgt_s->axiclk_khz * 1000);
@@ -414,18 +445,18 @@ static int acpuclk_8625q_set_rate(int cpu, unsigned long rate,
 			pr_warning("Setting AXI min rate failed (%d)\n", res);
 	}
 
-	
+	/* Disable PLLs we are not using anymore. */
 	if (tgt_s->pll != ACPU_PLL_TCXO)
 		plls_enabled &= ~(1 << tgt_s->pll);
 	for (pll = ACPU_PLL_0; pll < ACPU_PLL_END; pll++)
 		if (plls_enabled & (1 << pll))
 			clk_disable(pll_clk[pll].clk);
 
-	
+	/* Nothing else to do for power collapse. */
 	if (reason == SETRATE_PC)
 		goto out;
 
-	
+	/* Drop VDD level if we can. */
 	if (tgt_s->vdd < strt_s->vdd) {
 		res = acpuclk_set_vdd_level(tgt_s->vdd);
 		if (res < 0)
@@ -447,22 +478,31 @@ static int __devinit acpuclk_hw_init(void)
 	uint32_t div, sel, reg_clksel;
 	int res;
 
+	/*
+	 * Prepare all the PLLs because we enable/disable them
+	 * from atomic context and can't always ensure they're
+	 * all prepared in non-atomic context. Same goes for
+	 * ebi1_acpu_clk.
+	 */
 	BUG_ON(clk_prepare(pll_clk[ACPU_PLL_0].clk));
 	BUG_ON(clk_prepare(pll_clk[ACPU_PLL_1].clk));
 	BUG_ON(clk_prepare(pll_clk[ACPU_PLL_2].clk));
 	BUG_ON(clk_prepare(pll_clk[ACPU_PLL_4].clk));
 	BUG_ON(clk_prepare(drv_state.ebi1_clk));
 
+	/*
+	 * Determine the rate of ACPU clock
+	 */
 
-	if (!(readl_relaxed(A11S_CLK_SEL_ADDR) & 0x01)) { 
-		
+	if (!(readl_relaxed(A11S_CLK_SEL_ADDR) & 0x01)) { /* CLK_SEL_SRC1N0 */
+		/* CLK_SRC0_SEL */
 		sel = (readl_relaxed(A11S_CLK_CNTL_ADDR) >> 12) & 0x7;
-		
+		/* CLK_SRC0_DIV */
 		div = (readl_relaxed(A11S_CLK_CNTL_ADDR) >> 8) & 0x0f;
 	} else {
-		
+		/* CLK_SRC1_SEL */
 		sel = (readl_relaxed(A11S_CLK_CNTL_ADDR) >> 4) & 0x07;
-		
+		/* CLK_SRC1_DIV */
 		div = readl_relaxed(A11S_CLK_CNTL_ADDR) & 0x0f;
 	}
 
@@ -514,33 +554,9 @@ static unsigned long acpuclk_8625q_get_rate(int cpu)
 		return 0;
 }
 
-static int reinitialize_freq_table(bool target_select)
-{
-	if (target_select) {
-		struct clkctl_acpu_speed *tbl;
-		for (tbl = acpu_freq_tbl; tbl->a11clk_khz; tbl++) {
-
-			if (tbl->a11clk_khz >= 1008000) {
-				tbl->axiclk_khz = 300000;
-				if (tbl->a11clk_khz == 1209600)
-					tbl->vdd = 0;
-			} else {
-				if (tbl->a11clk_khz != 600000
-					&& tbl->a11clk_khz != 19200)
-					tbl->vdd = 1050000;
-				if (tbl->a11clk_khz == 700800)
-					tbl->axiclk_khz = 245000;
-			}
-		}
-
-	}
-	return 0;
-}
-
 #define MHZ 1000000
 
-static void __devinit select_freq_plan(unsigned int pvs_voltage,
-							bool target_sel)
+static void __devinit select_freq_plan(unsigned int pvs_voltage)
 {
 	unsigned long pll_mhz[ACPU_PLL_END];
 	int i;
@@ -548,7 +564,7 @@ static void __devinit select_freq_plan(unsigned int pvs_voltage,
 	int delta[3] = {DELTA_LEVEL_1_UV, DELTA_LEVEL_2_UV, DELTA_LEVEL_3_UV};
 	struct clkctl_acpu_speed *tbl;
 
-	
+	/* Get PLL clocks */
 	for (i = 0; i < ACPU_PLL_END; i++) {
 		if (pll_clk[i].name) {
 			pll_clk[i].clk = clk_get_sys("acpu", pll_clk[i].name);
@@ -556,7 +572,7 @@ static void __devinit select_freq_plan(unsigned int pvs_voltage,
 				pll_mhz[i] = 0;
 				continue;
 			}
-			
+			/* Get PLL's Rate */
 			pll_mhz[i] = clk_get_rate(pll_clk[i].clk)/MHZ;
 		}
 	}
@@ -564,15 +580,15 @@ static void __devinit select_freq_plan(unsigned int pvs_voltage,
 	memcpy(acpu_freq_tbl, acpu_freq_tbl_cmn, sizeof(acpu_freq_tbl_cmn));
 	size = ARRAY_SIZE(acpu_freq_tbl_cmn);
 
-	i = 0;		
-	
+	i = 0;		/* needed if we have a 1Ghz part */
+	/* select if it is a 1.2Ghz part */
 	if (pll_mhz[ACPU_PLL_4] == 1209) {
 		memcpy(acpu_freq_tbl + size, acpu_freq_tbl_1209,
 						sizeof(acpu_freq_tbl_1209));
 		size += sizeof(acpu_freq_tbl_1209);
-		i = 1;		
+		i = 1;		/* set the delta index */
 	}
-	
+	/* select if it is a 1.4Ghz part */
 	if (pll_mhz[ACPU_PLL_4] == 1401) {
 		memcpy(acpu_freq_tbl + size, acpu_freq_tbl_1209,
 						sizeof(acpu_freq_tbl_1209));
@@ -580,14 +596,14 @@ static void __devinit select_freq_plan(unsigned int pvs_voltage,
 		memcpy(acpu_freq_tbl + size, acpu_freq_tbl_1401,
 						sizeof(acpu_freq_tbl_1401));
 		size += ARRAY_SIZE(acpu_freq_tbl_1401);
-		i = 2;		
+		i = 2;		/* set the delta index */
 	}
 
 	memcpy(acpu_freq_tbl + size, acpu_freq_tbl_null,
 						sizeof(acpu_freq_tbl_null));
 	size += sizeof(acpu_freq_tbl_null);
 
-	
+	/* Alter the freq value in freq_tbl if it is a CDMA build*/
 	if (pll_mhz[ACPU_PLL_1] == 196) {
 
 		for (tbl = acpu_freq_tbl; tbl->a11clk_khz; tbl++) {
@@ -601,10 +617,27 @@ static void __devinit select_freq_plan(unsigned int pvs_voltage,
 		}
 	}
 
-	reinitialize_freq_table(target_sel);
-
+	/*
+	 *PVS Voltage calculation  formula
+	 *1.4 Ghz device
+	 *1.4 Ghz: Max(PVS_voltage,1.35V)
+	 *1.2 Ghz: Max(PVS_volatge - 75mV,1.275V)
+	 *1.0 Ghz: Max(PVS_voltage - 150mV, 1.175V)
+	 *1.2 Ghz device
+	 *1.2 Ghz: Max(PVS_voltage,1.275V)
+	 *1.0 Ghz: Max(PVS_volatge - 75mV,1.175V)
+	 *Nominal Mode: 1.15V
+	*/
 	for (tbl = acpu_freq_tbl; tbl->a11clk_khz; tbl++) {
 		if (tbl->a11clk_khz >= 1008000) {
+			/*
+			 * Change voltage as per PVS formula,
+			 * i is initialized above with 2 or 1
+			 * depending upon whether it is a 1.4Ghz
+			 * or 1.2Ghz, so, we get the proper value
+			 * from delta[i] which is to be deducted
+			 * from PVS voltage.
+			*/
 
 			tbl->vdd = max((int)(pvs_voltage - delta[i]), tbl->vdd);
 			i--;
@@ -612,7 +645,7 @@ static void __devinit select_freq_plan(unsigned int pvs_voltage,
 	}
 
 
-	
+	/* find the backup PLL entry from the table */
 	for (tbl = acpu_freq_tbl; tbl->a11clk_khz; tbl++) {
 		if (tbl->pll == ACPU_PLL_2 &&
 				tbl->a11clk_src_div == 1) {
@@ -625,6 +658,10 @@ static void __devinit select_freq_plan(unsigned int pvs_voltage,
 
 }
 
+/*
+ * Hardware requires the CPU to be dropped to less than MAX_WAIT_FOR_IRQ_KHZ
+ * before entering a wait for irq low-power mode. Find a suitable rate.
+ */
 static unsigned long __devinit find_wait_for_irq_khz(void)
 {
 	unsigned long found_khz = 0;
@@ -660,6 +697,14 @@ static void __devinit lpj_init(void)
 
 }
 
+/* TODO : FIX me:
+ * In order to keep PLL2 enabled we are
+ * calling acpuclk_probe as postcore_initcall
+ * but in that case we should call regulator_get
+ * after its dependencies are satisfied. So,
+ * temporarily we are fixing it by calling
+ * regulator_get at fs_initcall.
+ */
 static int __init get_reg(void)
 {
 	int res = 0;
@@ -702,53 +747,10 @@ static void __devinit print_acpu_freq_tbl(void)
 	}
 }
 
-
-static int acpu_debug_voltage_get(void *data, u64 *val)
-{
-	int voltage;
-
-	if (drv_state.vreg_cpu == NULL) {
-		pr_err("acpuclk: Invalid regulator handle ");
-		return -EINVAL;
-	}
-
-	voltage = regulator_get_voltage(drv_state.vreg_cpu);
-	if (voltage <= 0) {
-		pr_err("acpuclk: Get voltage failed\n");
-		*val = 0;
-		return -EINVAL;
-	}
-	*val = voltage;
-
-	return 0;
-}
-
-static int acpu_debug_voltage_set(void *data, u64 val)
-{
-	int rc;
-
-	if (drv_state.vreg_cpu == NULL) {
-		pr_err("acpuclk: Invalid regulator handle ");
-		return -EINVAL;
-	}
-
-	rc = regulator_set_voltage(drv_state.vreg_cpu, val, val);
-	if (rc)
-		pr_err("acpuclk: Set voltage %llu failed\n", val);
-
-	return rc;
-}
-
-DEFINE_SIMPLE_ATTRIBUTE(acpu_debug_voltage_fops, acpu_debug_voltage_get,
-			acpu_debug_voltage_set, "%llu\n");
-
 static int __devinit acpuclk_8625q_probe(struct platform_device *pdev)
 {
 	const struct acpuclk_pdata_8625q *pdata = pdev->dev.platform_data;
 	unsigned int pvs_voltage = pdata->pvs_voltage_uv;
-	bool target_sel = pdata->flag;
-	struct dentry *dir;
-	struct dentry *file;
 
 	drv_state.max_speed_delta_khz = pdata->acpu_clk_data->
 						max_speed_delta_khz;
@@ -757,7 +759,7 @@ static int __devinit acpuclk_8625q_probe(struct platform_device *pdev)
 	BUG_ON(IS_ERR(drv_state.ebi1_clk));
 
 	mutex_init(&drv_state.lock);
-	select_freq_plan(pvs_voltage, target_sel);
+	select_freq_plan(pvs_voltage);
 	acpuclk_8625q_data.wait_for_irq_khz = find_wait_for_irq_khz();
 
 	if (acpuclk_hw_init() < 0)
@@ -768,22 +770,6 @@ static int __devinit acpuclk_8625q_probe(struct platform_device *pdev)
 	acpuclk_register(&acpuclk_8625q_data);
 
 	cpufreq_table_init();
-
-	dir = debugfs_create_dir("acpu_regulator", NULL);
-	
-	if (dir == NULL || IS_ERR(dir))
-		pr_err("acpuclk: debugfs_create_dir failed: rc=%ld\n",
-			PTR_ERR(dir));
-	else {
-		file = debugfs_create_file("voltage", S_IRUGO | S_IWUSR, dir,
-			NULL, &acpu_debug_voltage_fops);
-
-		if (file == NULL  || IS_ERR(file)) {
-			pr_err("acpuclk: debugfs_create_file failed: rc=%ld\n",
-				PTR_ERR(file));
-			debugfs_remove_recursive(dir);
-		}
-	}
 
 	return 0;
 }
